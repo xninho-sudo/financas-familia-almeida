@@ -38,7 +38,6 @@ st.markdown("""\
         font-family: 'Plus Jakarta Sans', sans-serif;\
     \}\
     \
-    /* Header principal */\
     .header-box \{\
         background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%);\
         padding: 24px 30px;\
@@ -61,7 +60,6 @@ st.markdown("""\
         margin-bottom: 0;\
     \}\
     \
-    /* Cards de m\'e9tricas */\
     .metric-card \{\
         background: #FFFFFF;\
         border: 1px solid #E5E7EB;\
@@ -107,7 +105,6 @@ def init_database():\
     conn = get_db()\
     cursor = conn.cursor()\
     \
-    # 1. Tabela de Transa\'e7\'f5es\
     cursor.execute("""\
     CREATE TABLE IF NOT EXISTS transacoes (\
         id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -124,7 +121,6 @@ def init_database():\
     )\
     """)\
     \
-    # 2. Tabela de Categorias\
     cursor.execute("""\
     CREATE TABLE IF NOT EXISTS categorias (\
         id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -133,7 +129,6 @@ def init_database():\
     )\
     """)\
     \
-    # 3. Tabela de Metas e Economias\
     cursor.execute("""\
     CREATE TABLE IF NOT EXISTS metas_economias (\
         id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -145,7 +140,6 @@ def init_database():\
     )\
     """)\
     \
-    # Inser\'e7\'e3o de categorias padr\'e3o se vazia\
     cursor.execute("SELECT COUNT(*) FROM categorias")\
     if cursor.fetchone()[0] == 0:\
         categorias_iniciais = [\
@@ -215,6 +209,21 @@ def insert_transacao(data_str, descricao, categoria, tipo, valor, observacoes=""
     INSERT INTO transacoes (data, dia, mes, ano, descricao, categoria, tipo, debito, credito, observacoes)\
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\
     """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip()))\
+    conn.commit()\
+    conn.close()\
+\
+def update_transacao(transacao_id, data_str, descricao, categoria, tipo, valor, observacoes=""):\
+    d_obj = datetime.strptime(data_str, "%Y-%m-%d").date()\
+    debito = float(valor) if tipo in ["D\'e9bito", "Aplica\'e7\'e3o", "Economia"] else 0.0\
+    credito = float(valor) if tipo == "Cr\'e9dito" else 0.0\
+    \
+    conn = get_db()\
+    cursor = conn.cursor()\
+    cursor.execute("""\
+    UPDATE transacoes \
+    SET data = ?, dia = ?, mes = ?, ano = ?, descricao = ?, categoria = ?, tipo = ?, debito = ?, credito = ?, observacoes = ?\
+    WHERE id = ?\
+    """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip(), transacao_id))\
     conn.commit()\
     conn.close()\
 \
@@ -359,7 +368,6 @@ def generate_pdf_report(mes, ano):\
 \
     elements = []\
     \
-    # 1. Cabe\'e7alho\
     elements.append(Paragraph("<b>Finan\'e7as Fam\'edlia Almeida</b>", title_style))\
     nome_meses = ["Janeiro", "Fevereiro", "Mar\'e7o", "Abril", "Maio", "Junho", \
                   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]\
@@ -367,7 +375,6 @@ def generate_pdf_report(mes, ano):\
     elements.append(Paragraph(f"Relat\'f3rio Financeiro Oficial \'97 \{mes_str\} / \{ano\}", subtitle_style))\
     elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#1E3A8A'), spaceAfter=14))\
     \
-    # 2. Resumo\
     total_credito = df['credito'].sum() if not df.empty else 0.0\
     total_debito = df[df['tipo'] == 'D\'e9bito']['debito'].sum() if not df.empty else 0.0\
     total_aplicado = df[df['tipo'] == 'Aplica\'e7\'e3o']['debito'].sum() if not df.empty else 0.0\
@@ -410,7 +417,6 @@ def generate_pdf_report(mes, ano):\
     elements.append(summary_table)\
     elements.append(Spacer(1, 14))\
     \
-    # 3. Tabela de Lan\'e7amentos\
     elements.append(Paragraph("<b>Extrato de Lan\'e7amentos</b>", section_style))\
     table_data = [[\
         Paragraph("<b>Data</b>", header_cell_style),\
@@ -452,7 +458,6 @@ def generate_pdf_report(mes, ano):\
     ]))\
     elements.append(item_table)\
     \
-    # 4. Rodap\'e9\
     elements.append(Spacer(1, 15))\
     data_geracao = datetime.now().strftime("%d/%m/%Y \'e0s %H:%M")\
     elements.append(Paragraph(f"<font size=7 color='#6B7280'>Documento emitido pelo aplicativo Finan\'e7as Fam\'edlia Almeida em \{data_geracao\}.</font>", cell_style))\
@@ -478,7 +483,6 @@ st.markdown("""\
 </div>\
 """, unsafe_allow_html=True)\
 \
-# Navega\'e7\'e3o Lateral\
 st.sidebar.title("\uc0\u55358 \u56813  Navega\'e7\'e3o & Filtros")\
 \
 menu = st.sidebar.radio(\
@@ -569,7 +573,7 @@ if menu == "\uc0\u55357 \u56522  Dashboard Geral":\
         \
     st.markdown("<br>", unsafe_allow_html=True)\
     \
-    col_g1, col_g2 = st.columns([1.2, 1])\
+    col_g1, col_g2 = st.columns(2)\
     with col_g1:\
         st.markdown("#### \uc0\u55357 \u56520  Evolu\'e7\'e3o Mensal do Ano")\
         if not df_ano.empty:\
@@ -608,16 +612,19 @@ if menu == "\uc0\u55357 \u56522  Dashboard Geral":\
 \
 # 2. Lan\'e7amentos & Extrato\
 elif menu == "\uc0\u55357 \u56541  Lan\'e7amentos & Extrato":\
-    st.subheader("Novo Lan\'e7amento Financeiro")\
+    st.subheader("Gerenciador de Lan\'e7amentos")\
     \
-    with st.expander("\uc0\u10133  Adicionar Novo Lan\'e7amento", expanded=True):\
+    tab_novo, tab_editar = st.tabs(["\uc0\u10133  Novo Lan\'e7amento", "\u9999 \u65039  Editar Lan\'e7amento"])\
+    \
+    with tab_novo:\
         with st.form("form_novo_lancamento", clear_on_submit=True):\
-            col_f1, col_f2, col_f3 = st.columns([1, 1.5, 1])\
+            col_f1, col_f2, col_f3 = st.columns(3)\
             with col_f1:\
-                data_lancamento = st.date_input("Data do Lan\'e7amento:", value=date.today())\
+                data_lancamento = st.date_input("Data do Lan\'e7amento:", value=date.today(), key="novo_data")\
                 tipo_lancamento = st.selectbox(\
                     "Tipo de Opera\'e7\'e3o:", \
-                    ["D\'e9bito (Despesa)", "Cr\'e9dito (Receita)", "Aplica\'e7\'e3o (Investimento)", "Economia (Reserva/Metas)"]\
+                    ["D\'e9bito (Despesa)", "Cr\'e9dito (Receita)", "Aplica\'e7\'e3o (Investimento)", "Economia (Reserva/Metas)"],\
+                    key="novo_tipo"\
                 )\
             \
             tipo_map = \{\
@@ -632,12 +639,12 @@ elif menu == "\uc0\u55357 \u56541  Lan\'e7amentos & Extrato":\
                 categorias_disponiveis = get_categorias()\
                 \
             with col_f2:\
-                descricao = st.text_input("Descri\'e7\'e3o / Lan\'e7amento:", placeholder="Ex: Sal\'e1rio, Supermercado, Aporte CDB...")\
-                categoria = st.selectbox("Categoria Agregada:", categorias_disponiveis)\
+                descricao = st.text_input("Descri\'e7\'e3o / Lan\'e7amento:", placeholder="Ex: Sal\'e1rio, Supermercado, Aporte CDB...", key="novo_desc")\
+                categoria = st.selectbox("Categoria Agregada:", categorias_disponiveis, key="novo_cat")\
                 \
             with col_f3:\
-                valor = st.number_input("Valor (R$):", min_value=0.01, step=50.0, format="%.2f")\
-                observacoes = st.text_input("Observa\'e7\'f5es (Opcional):", placeholder="Detalhes...")\
+                valor = st.number_input("Valor (R$):", min_value=0.01, step=50.0, format="%.2f", key="novo_valor")\
+                observacoes = st.text_input("Observa\'e7\'f5es (Opcional):", placeholder="Detalhes...", key="novo_obs")\
                 \
             submitted = st.form_submit_button("\uc0\u55357 \u56510  Salvar Lan\'e7amento", use_container_width=True)\
             if submitted:\
@@ -655,22 +662,104 @@ elif menu == "\uc0\u55357 \u56541  Lan\'e7amentos & Extrato":\
                     st.success(f"Lan\'e7amento '\{descricao\}' de \{format_currency(valor)\} registrado com sucesso!")\
                     st.rerun()\
 \
+    with tab_editar:\
+        df_todas = load_transacoes(mes=None, ano=ano_selecionado)\
+        if not df_todas.empty:\
+            opcoes_transacoes = df_todas['id'].tolist()\
+            \
+            def format_opcao(tid):\
+                row = df_todas[df_todas['id'] == tid].iloc[0]\
+                val = row['debito'] if row['debito'] > 0 else row['credito']\
+                return f"ID \{tid\} | \{int(row['dia']):02d\}/\{int(row['mes']):02d\}/\{int(row['ano'])\} - \{row['descricao']\} (\{format_currency(val)\}) [\{row['tipo']\}]"\
+            \
+            transacao_selecionada_id = st.selectbox(\
+                "Selecione o lan\'e7amento que deseja editar:",\
+                opcoes_transacoes,\
+                format_func=format_opcao,\
+                key="select_edit_transacao"\
+            )\
+            \
+            item_atual = df_todas[df_todas['id'] == transacao_selecionada_id].iloc[0]\
+            data_atual_obj = datetime.strptime(item_atual['data'], "%Y-%m-%d").date()\
+            valor_atual_num = float(item_atual['debito'] if item_atual['debito'] > 0 else item_atual['credito'])\
+            \
+            tipo_invert_map = \{\
+                "D\'e9bito": "D\'e9bito (Despesa)",\
+                "Cr\'e9dito": "Cr\'e9dito (Receita)",\
+                "Aplica\'e7\'e3o": "Aplica\'e7\'e3o (Investimento)",\
+                "Economia": "Economia (Reserva/Metas)"\
+            \}\
+            tipo_label_atual = tipo_invert_map.get(item_atual['tipo'], "D\'e9bito (Despesa)")\
+            lista_tipos = ["D\'e9bito (Despesa)", "Cr\'e9dito (Receita)", "Aplica\'e7\'e3o (Investimento)", "Economia (Reserva/Metas)"]\
+            tipo_index_atual = lista_tipos.index(tipo_label_atual) if tipo_label_atual in lista_tipos else 0\
+            \
+            with st.form(f"form_editar_\{transacao_selecionada_id\}"):\
+                c_e1, c_e2, c_e3 = st.columns(3)\
+                with c_e1:\
+                    edit_data = st.date_input("Data:", value=data_atual_obj, key=f"edit_data_\{transacao_selecionada_id\}")\
+                    edit_tipo_label = st.selectbox(\
+                        "Tipo de Opera\'e7\'e3o:", \
+                        lista_tipos, \
+                        index=tipo_index_atual, \
+                        key=f"edit_tipo_\{transacao_selecionada_id\}"\
+                    )\
+                \
+                tipo_map = \{\
+                    "D\'e9bito (Despesa)": ("D\'e9bito", "Despesa"),\
+                    "Cr\'e9dito (Receita)": ("Cr\'e9dito", "Receita"),\
+                    "Aplica\'e7\'e3o (Investimento)": ("Aplica\'e7\'e3o", "Investimento"),\
+                    "Economia (Reserva/Metas)": ("Economia", "Economia")\
+                \}\
+                edit_tipo_db, edit_cat_tipo = tipo_map[edit_tipo_label]\
+                cats_para_editar = get_categorias(edit_cat_tipo)\
+                if not cats_para_editar:\
+                    cats_para_editar = get_categorias()\
+                cat_index_atual = cats_para_editar.index(item_atual['categoria']) if item_atual['categoria'] in cats_para_editar else 0\
+                \
+                with c_e2:\
+                    edit_descricao = st.text_input("Descri\'e7\'e3o / Lan\'e7amento:", value=str(item_atual['descricao']), key=f"edit_desc_\{transacao_selecionada_id\}")\
+                    edit_categoria = st.selectbox("Categoria:", cats_para_editar, index=cat_index_atual, key=f"edit_cat_\{transacao_selecionada_id\}")\
+                    \
+                with c_e3:\
+                    edit_valor = st.number_input("Valor (R$):", min_value=0.01, step=50.0, format="%.2f", value=valor_atual_num, key=f"edit_val_\{transacao_selecionada_id\}")\
+                    edit_obs = st.text_input("Observa\'e7\'f5es:", value=str(item_atual['observacoes'] or ''), key=f"edit_obs_\{transacao_selecionada_id\}")\
+                    \
+                btn_salvar_edicao = st.form_submit_button("\uc0\u55357 \u56510  Salvar Altera\'e7\'f5es", type="primary", use_container_width=True)\
+                if btn_salvar_edicao:\
+                    if not edit_descricao:\
+                        st.error("A descri\'e7\'e3o n\'e3o pode ficar vazia.")\
+                    else:\
+                        update_transacao(\
+                            transacao_id=transacao_selecionada_id,\
+                            data_str=edit_data.strftime("%Y-%m-%d"),\
+                            descricao=edit_descricao,\
+                            categoria=edit_categoria,\
+                            tipo=edit_tipo_db,\
+                            valor=edit_valor,\
+                            observacoes=edit_obs\
+                        )\
+                        st.success(f"Lan\'e7amento '\{edit_descricao\}' atualizado com sucesso!")\
+                        st.rerun()\
+        else:\
+            st.info("Nenhum lan\'e7amento cadastrado no ano selecionado para editar.")\
+\
     st.markdown("---")\
     st.subheader(f"Extrato Cronol\'f3gico \'97 \{mes_label\}")\
     \
     if not df_periodo.empty:\
-        busca = st.text_input("\uc0\u55357 \u56589  Filtrar lan\'e7amentos:", "")\
         df_exibir = df_periodo.copy()\
-        if busca:\
-            df_exibir = df_exibir[\
-                df_exibir['descricao'].str.contains(busca, case=False, na=False) |\
-                df_exibir['categoria'].str.contains(busca, case=False, na=False)\
-            ]\
-            \
-        df_exibir['Data'] = df_exibir.apply(lambda r: f"\{int(r['dia']):02d\}/\{int(r['mes']):02d\}/\{int(r['ano'])\}", axis=1)\
+        df_exibir['Data'] = df_exibir['dia'].astype(int).astype(str).str.zfill(2) + '/' + df_exibir['mes'].astype(int).astype(str).str.zfill(2) + '/' + df_exibir['ano'].astype(int).astype(str)\
         df_exibir['D\'e9bito'] = df_exibir['debito'].apply(lambda x: format_currency(x) if x > 0 else "-")\
         df_exibir['Cr\'e9dito'] = df_exibir['credito'].apply(lambda x: format_currency(x) if x > 0 else "-")\
         df_exibir['Saldo'] = df_exibir['saldo_acumulado'].apply(format_currency)\
+        \
+        busca = st.text_input("\uc0\u55357 \u56589  Filtrar lan\'e7amentos:", "")\
+        if busca:\
+            df_exibir = df_exibir[\
+                df_exibir['descricao'].str.contains(busca, case=False, na=False) |\
+                df_exibir['categoria'].str.contains(busca, case=False, na=False) |\
+                df_exibir['Data'].str.contains(busca, case=False, na=False)\
+            ]\
         \
         st.dataframe(\
             df_exibir[['id', 'Data', 'descricao', 'categoria', 'tipo', 'D\'e9bito', 'Cr\'e9dito', 'Saldo', 'observacoes']],\
@@ -690,10 +779,10 @@ elif menu == "\uc0\u55357 \u56541  Lan\'e7amentos & Extrato":\
         )\
         \
         with st.expander("\uc0\u55357 \u56785 \u65039  Excluir Lan\'e7amento"):\
-            col_del1, col_del2 = st.columns([2, 1])\
+            col_del1, col_del2 = st.columns(2)\
             with col_del1:\
                 transacao_para_excluir = st.selectbox(\
-                    "Selecione o lan\'e7amento:",\
+                    "Selecione o lan\'e7amento para excluir:",\
                     df_periodo['id'].tolist(),\
                     format_func=lambda tid: f"ID \{tid\} - \{df_periodo[df_periodo['id']==tid]['descricao'].values[0]\}"\
                 )\
@@ -739,7 +828,7 @@ elif menu == "\uc0\u55357 \u56520  An\'e1lise de Aplica\'e7\'f5es":\
         """, unsafe_allow_html=True)\
 \
     st.markdown("<br>", unsafe_allow_html=True)\
-    col_inv1, col_inv2 = st.columns([1.2, 1])\
+    col_inv1, col_inv2 = st.columns(2)\
     with col_inv1:\
         st.markdown("#### \uc0\u55357 \u56522  Aportes por Classe de Ativo")\
         if not df_aplicacoes_ano.empty:\
@@ -753,7 +842,7 @@ elif menu == "\uc0\u55357 \u56520  An\'e1lise de Aplica\'e7\'f5es":\
         st.markdown("#### \uc0\u55357 \u56523  Hist\'f3rico de Aportes")\
         if not df_aplicacoes.empty:\
             df_ap_show = df_aplicacoes.copy()\
-            df_ap_show['Data'] = df_ap_show.apply(lambda r: f"\{int(r['dia']):02d\}/\{int(r['mes']):02d\}/\{int(r['ano'])\}", axis=1)\
+            df_ap_show['Data'] = df_ap_show['dia'].astype(int).astype(str).str.zfill(2) + '/' + df_ap_show['mes'].astype(int).astype(str).str.zfill(2) + '/' + df_ap_show['ano'].astype(int).astype(str)\
             df_ap_show['Valor'] = df_ap_show['debito'].apply(format_currency)\
             st.dataframe(df_ap_show[['Data', 'descricao', 'categoria', 'Valor']], use_container_width=True, hide_index=True)\
         else:\
@@ -794,7 +883,7 @@ elif menu == "\uc0\u55356 \u57263  Economias & Metas":\
             \
             with st.container():\
                 st.markdown(f"### \uc0\u55356 \u57263  \{m['nome']\}")\
-                col_mt1, col_mt2, col_mt3, col_mt4 = st.columns([2, 1.5, 1.5, 1])\
+                col_mt1, col_mt2, col_mt3, col_mt4 = st.columns(4)\
                 with col_mt1:\
                     st.progress(min(perc, 1.0))\
                     st.caption(f"Progresso: **\{perc_display:.1f\}%**")\
@@ -807,7 +896,7 @@ elif menu == "\uc0\u55356 \u57263  Economias & Metas":\
                     st.markdown(f"**Falta:** `\{format_currency(falta)\}`")\
                 \
                 with st.expander(f"\uc0\u9881 \u65039  Atualizar ou Excluir '\{m['nome']\}'"):\
-                    c_up1, c_up2 = st.columns([2, 1])\
+                    c_up1, c_up2 = st.columns(2)\
                     with c_up1:\
                         novo_v = st.number_input("Atualizar Saldo (R$):", value=float(m['valor_atual']), step=100.0, key=f"inp_\{m['id']\}")\
                         if st.button("Salvar Novo Saldo", key=f"btn_up_\{m['id']\}"):\
@@ -828,7 +917,7 @@ elif menu == "\uc0\u55356 \u57263  Economias & Metas":\
 elif menu == "\uc0\u55357 \u56516  Relat\'f3rios em PDF":\
     st.subheader("Gerador de Relat\'f3rios Oficiais em PDF")\
     \
-    col_r1, col_r2 = st.columns([1.5, 1])\
+    col_r1, col_r2 = st.columns(2)\
     with col_r1:\
         st.markdown(f"""\
         <div class="metric-card">\

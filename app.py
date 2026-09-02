@@ -128,54 +128,74 @@ def check_authentication():
 check_authentication()
 
 # ==========================================
-# CONEXÃO COM BANCO DE DADOS (SUPABASE / POSTGRESQL / SQLITE)
+# CONEXÃO COM BANCO DE DADOS (COM CACHE DE CONEXÃO)
 # ==========================================
-IS_POSTGRES = False
-engine = None
-db_error_msg = None
-
-try:
-    if "postgres" in st.secrets:
-        pg = st.secrets["postgres"]
-        user_enc = urllib.parse.quote_plus(str(pg.get("user", "postgres")))
-        pass_enc = urllib.parse.quote_plus(str(pg.get("password", "")))
-        host = str(pg.get("host", "")).strip()
-        port = int(pg.get("port", 6543))
-        dbname = str(pg.get("database", "postgres")).strip()
-        DATABASE_URL = f"postgresql+psycopg2://{user_enc}:{pass_enc}@{host}:{port}/{dbname}"
-        
-        from sqlalchemy import create_engine, text
-        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-        with engine.connect() as test_conn:
-            test_conn.execute(text("SELECT 1"))
-        IS_POSTGRES = True
-        
-    elif "DATABASE_URL" in st.secrets and len(str(st.secrets["DATABASE_URL"]).strip()) > 0:
-        raw_url = str(st.secrets["DATABASE_URL"]).strip()
-        if raw_url.startswith("postgres://"):
-            raw_url = "postgresql+psycopg2://" + raw_url[11:]
-        elif raw_url.startswith("postgresql://") and not raw_url.startswith("postgresql+psycopg2://"):
-            raw_url = "postgresql+psycopg2://" + raw_url[13:]
-            
-        from sqlalchemy import create_engine, text
-        engine = create_engine(raw_url, pool_pre_ping=True)
-        with engine.connect() as test_conn:
-            test_conn.execute(text("SELECT 1"))
-        IS_POSTGRES = True
-        
-except Exception as e:
-    IS_POSTGRES = False
-    engine = None
-    db_error_msg = str(e)
-
 DB_FILE = "financas_familia_almeida.db"
+
+@st.cache_resource
+def get_db_engine():
+    engine = None
+    is_postgres = False
+    error_msg = None
+    
+    try:
+        if "postgres" in st.secrets:
+            pg = st.secrets["postgres"]
+            user_enc = urllib.parse.quote_plus(str(pg.get("user", "postgres")))
+            pass_enc = urllib.parse.quote_plus(str(pg.get("password", "")))
+            host = str(pg.get("host", "")).strip()
+            port = int(pg.get("port", 6543))
+            dbname = str(pg.get("database", "postgres")).strip()
+            db_url = f"postgresql+psycopg2://{user_enc}:{pass_enc}@{host}:{port}/{dbname}"
+            
+            from sqlalchemy import create_engine, text
+            engine = create_engine(
+                db_url,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
+                pool_pre_ping=True
+            )
+            with engine.connect() as test_conn:
+                test_conn.execute(text("SELECT 1"))
+            is_postgres = True
+            
+        elif "DATABASE_URL" in st.secrets and len(str(st.secrets["DATABASE_URL"]).strip()) > 0:
+            raw_url = str(st.secrets["DATABASE_URL"]).strip()
+            if raw_url.startswith("postgres://"):
+                raw_url = "postgresql+psycopg2://" + raw_url[11:]
+            elif raw_url.startswith("postgresql://") and not raw_url.startswith("postgresql+psycopg2://"):
+                raw_url = "postgresql+psycopg2://" + raw_url[13:]
+                
+            from sqlalchemy import create_engine, text
+            engine = create_engine(
+                raw_url,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
+                pool_pre_ping=True
+            )
+            with engine.connect() as test_conn:
+                test_conn.execute(text("SELECT 1"))
+            is_postgres = True
+            
+    except Exception as e:
+        is_postgres = False
+        engine = None
+        error_msg = str(e)
+        
+    return engine, is_postgres, error_msg
+
+engine, IS_POSTGRES, db_error_msg = get_db_engine()
 
 def get_sqlite_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_database():
+@st.cache_resource
+def setup_database_schema():
+    """Inicializa as tabelas apenas UMA vez por ciclo do servidor"""
     if IS_POSTGRES and engine is not None:
         from sqlalchemy import text
         with engine.begin() as conn:
@@ -298,12 +318,14 @@ def init_database():
             cursor.executemany("INSERT INTO categorias (nome, tipo) VALUES (?, ?)", categorias_iniciais)
         conn.commit()
         conn.close()
+    return True
 
-init_database()
+setup_database_schema()
 
 # ==========================================
-# FUNÇÕES DE CRUD
+# FUNÇÕES DE CRUD (COM CACHE INTELIGENTE)
 # ==========================================
+@st.cache_data(ttl=300)
 def get_categorias(tipo=None):
     if IS_POSTGRES and engine is not None:
         from sqlalchemy import text
@@ -329,14 +351,15 @@ def get_categorias(tipo=None):
             return [dict(r) for r in rows]
 
 def add_categoria(nome, tipo):
+    success = False
     if IS_POSTGRES and engine is not None:
         from sqlalchemy import text
         try:
             with engine.begin() as conn:
                 conn.execute(text("INSERT INTO categorias (nome, tipo) VALUES (:n, :t)"), {"n": nome.strip(), "t": tipo})
-            return True
+            success = True
         except Exception:
-            return False
+            success = False
     else:
         conn = get_sqlite_conn()
         cursor = conn.cursor()
@@ -347,7 +370,10 @@ def add_categoria(nome, tipo):
         except sqlite3.IntegrityError:
             success = False
         conn.close()
-        return success
+        
+    if success:
+        st.cache_data.clear()
+    return success
 
 def insert_transacao(data_str, descricao, categoria, tipo, valor, observacoes=""):
     d_obj = datetime.strptime(data_str, "%Y-%m-%d").date()
@@ -374,6 +400,8 @@ def insert_transacao(data_str, descricao, categoria, tipo, valor, observacoes=""
         """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip()))
         conn.commit()
         conn.close()
+        
+    st.cache_data.clear()
 
 def update_transacao(transacao_id, data_str, descricao, categoria, tipo, valor, observacoes=""):
     d_obj = datetime.strptime(data_str, "%Y-%m-%d").date()
@@ -402,6 +430,8 @@ def update_transacao(transacao_id, data_str, descricao, categoria, tipo, valor, 
         """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip(), transacao_id))
         conn.commit()
         conn.close()
+        
+    st.cache_data.clear()
 
 def delete_transacao(transacao_id):
     if IS_POSTGRES and engine is not None:
@@ -414,30 +444,21 @@ def delete_transacao(transacao_id):
         cursor.execute("DELETE FROM transacoes WHERE id = ?", (transacao_id,))
         conn.commit()
         conn.close()
-
-def load_transacoes(mes=None, ano=None):
-    query_str = "SELECT * FROM transacoes WHERE 1=1"
-    params_dict = {}
-    params_list = []
-    
-    if ano:
-        query_str += " AND ano = :ano" if IS_POSTGRES else " AND ano = ?"
-        params_dict["ano"] = ano
-        params_list.append(ano)
-    if mes:
-        query_str += " AND mes = :mes" if IS_POSTGRES else " AND mes = ?"
-        params_dict["mes"] = mes
-        params_list.append(mes)
         
-    query_str += " ORDER BY data ASC, id ASC"
+    st.cache_data.clear()
+
+@st.cache_data(ttl=60)
+def load_transacoes_ano(ano):
+    """Consulta única do ano no banco, com cache automático na memória"""
+    query_str = "SELECT * FROM transacoes WHERE ano = :ano ORDER BY data ASC, id ASC" if IS_POSTGRES else "SELECT * FROM transacoes WHERE ano = ? ORDER BY data ASC, id ASC"
     
     if IS_POSTGRES and engine is not None:
         from sqlalchemy import text
         with engine.connect() as conn:
-            df = pd.read_sql_query(text(query_str), conn, params=params_dict)
+            df = pd.read_sql_query(text(query_str), conn, params={"ano": ano})
     else:
         conn = get_sqlite_conn()
-        df = pd.read_sql_query(query_str, conn, params=params_list)
+        df = pd.read_sql_query(query_str, conn, params=[ano])
         conn.close()
         
     if not df.empty:
@@ -451,6 +472,7 @@ def load_transacoes(mes=None, ano=None):
         ])
     return df
 
+@st.cache_data(ttl=120)
 def get_anos_disponiveis():
     if IS_POSTGRES and engine is not None:
         from sqlalchemy import text
@@ -474,6 +496,7 @@ def format_currency(val):
         val = 0.0
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+@st.cache_data(ttl=60)
 def get_metas():
     if IS_POSTGRES and engine is not None:
         from sqlalchemy import text
@@ -508,6 +531,7 @@ def insert_meta(nome, valor_alvo, valor_atual, data_limite, categoria):
         """, (nome, float(valor_alvo), float(valor_atual), data_limite, categoria))
         conn.commit()
         conn.close()
+    st.cache_data.clear()
 
 def update_meta_valor(meta_id, novo_valor):
     if IS_POSTGRES and engine is not None:
@@ -520,6 +544,7 @@ def update_meta_valor(meta_id, novo_valor):
         cursor.execute("UPDATE metas_economias SET valor_atual = ? WHERE id = ?", (float(novo_valor), meta_id))
         conn.commit()
         conn.close()
+    st.cache_data.clear()
 
 def delete_meta(meta_id):
     if IS_POSTGRES and engine is not None:
@@ -532,12 +557,12 @@ def delete_meta(meta_id):
         cursor.execute("DELETE FROM metas_economias WHERE id = ?", (meta_id,))
         conn.commit()
         conn.close()
+    st.cache_data.clear()
 
 # ==========================================
 # GERADOR DE RELATÓRIO EM PDF
 # ==========================================
-def generate_pdf_report(mes, ano):
-    df = load_transacoes(mes, ano)
+def generate_pdf_report(df_dados, mes, ano):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -601,10 +626,10 @@ def generate_pdf_report(mes, ano):
     elements.append(Paragraph(f"Relatório Financeiro Oficial — {mes_str} / {ano}", subtitle_style))
     elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#1E3A8A'), spaceAfter=14))
     
-    total_credito = df['credito'].sum() if not df.empty else 0.0
-    total_debito = df[df['tipo'] == 'Débito']['debito'].sum() if not df.empty else 0.0
-    total_aplicado = df[df['tipo'] == 'Aplicação']['debito'].sum() if not df.empty else 0.0
-    total_poupado = df[df['tipo'] == 'Economia']['debito'].sum() if not df.empty else 0.0
+    total_credito = df_dados['credito'].sum() if not df_dados.empty else 0.0
+    total_debito = df_dados[df_dados['tipo'] == 'Débito']['debito'].sum() if not df_dados.empty else 0.0
+    total_aplicado = df_dados[df_dados['tipo'] == 'Aplicação']['debito'].sum() if not df_dados.empty else 0.0
+    total_poupado = df_dados[df_dados['tipo'] == 'Economia']['debito'].sum() if not df_dados.empty else 0.0
     saldo_liquido = total_credito - total_debito - total_aplicado - total_poupado
     
     summary_data = [
@@ -654,7 +679,7 @@ def generate_pdf_report(mes, ano):
         Paragraph("<b>Saldo</b>", header_cell_style),
     ]]
     
-    for _, row in df.iterrows():
+    for _, row in df_dados.iterrows():
         deb_str = format_currency(row['debito']) if row['debito'] > 0 else "-"
         cred_str = format_currency(row['credito']) if row['credito'] > 0 else "-"
         saldo_str = format_currency(row['saldo_acumulado'])
@@ -752,15 +777,17 @@ nome_meses = [
 mes_atual_idx = datetime.now().month
 mes_selecionado_str = st.sidebar.selectbox("Mês:", nome_meses, index=mes_atual_idx)
 
+# OTIMIZAÇÃO: Consulta única do ano no banco, filtragem instantânea em memória RAM (Pandas)
+df_ano = load_transacoes_ano(ano_selecionado)
+
 if mes_selecionado_str == "Todos os Meses (Anual)":
     mes_selecionado = None
     mes_label = f"Ano de {ano_selecionado}"
+    df_periodo = df_ano.copy()
 else:
     mes_selecionado = int(mes_selecionado_str.split(" - ")[0])
     mes_label = f"{nome_meses[mes_selecionado]} de {ano_selecionado}"
-
-df_periodo = load_transacoes(mes=mes_selecionado, ano=ano_selecionado)
-df_ano = load_transacoes(mes=None, ano=ano_selecionado)
+    df_periodo = df_ano[df_ano['mes'] == mes_selecionado].copy()
 
 total_credito = df_periodo['credito'].sum() if not df_periodo.empty else 0.0
 total_debito = df_periodo[df_periodo['tipo'] == 'Débito']['debito'].sum() if not df_periodo.empty else 0.0
@@ -904,12 +931,11 @@ elif menu == "📝 Lançamentos & Extrato":
                     st.rerun()
 
     with tab_editar:
-        df_todas = load_transacoes(mes=None, ano=ano_selecionado)
-        if not df_todas.empty:
-            opcoes_transacoes = df_todas['id'].tolist()
+        if not df_ano.empty:
+            opcoes_transacoes = df_ano['id'].tolist()
             
             def format_opcao(tid):
-                row = df_todas[df_todas['id'] == tid].iloc[0]
+                row = df_ano[df_ano['id'] == tid].iloc[0]
                 val = row['debito'] if row['debito'] > 0 else row['credito']
                 return f"ID {tid} | {int(row['dia']):02d}/{int(row['mes']):02d}/{int(row['ano'])} - {row['descricao']} ({format_currency(val)}) [{row['tipo']}]"
             
@@ -920,7 +946,7 @@ elif menu == "📝 Lançamentos & Extrato":
                 key="select_edit_transacao"
             )
             
-            item_atual = df_todas[df_todas['id'] == transacao_selecionada_id].iloc[0]
+            item_atual = df_ano[df_ano['id'] == transacao_selecionada_id].iloc[0]
             data_atual_obj = datetime.strptime(str(item_atual['data'])[:10], "%Y-%m-%d").date()
             valor_atual_num = float(item_atual['debito'] if item_atual['debito'] > 0 else item_atual['credito'])
             
@@ -1179,7 +1205,7 @@ elif menu == "📄 Relatórios em PDF":
             if df_periodo.empty:
                 st.warning("Não há lançamentos no período para gerar o PDF.")
             else:
-                pdf_bytes = generate_pdf_report(mes=mes_selecionado, ano=ano_selecionado)
+                pdf_bytes = generate_pdf_report(df_periodo, mes=mes_selecionado, ano=ano_selecionado)
                 nome_arquivo = f"Relatorio_Financas_Almeida_{ano_selecionado}_{mes_selecionado or 'Anual'}.pdf"
                 st.download_button(
                     label="📥 Baixar Relatório em PDF",

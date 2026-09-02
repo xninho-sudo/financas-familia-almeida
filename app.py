@@ -101,7 +101,7 @@ def check_authentication():
         st.session_state.authenticated = False
         
     if not st.session_state.authenticated:
-        _, col_login, _ = st.columns()
+        col_esq, col_login, col_dir = st.columns()
         with col_login:
             st.markdown("""
             <div class="login-card" translate="no">

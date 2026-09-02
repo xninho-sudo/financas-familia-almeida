@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, date
 import io
 import os
+import urllib.parse
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
@@ -127,23 +128,56 @@ def check_authentication():
 check_authentication()
 
 # ==========================================
-# CAMADA DE BANCO DE DADOS HÍBRIDA (SUPABASE / SQLITE)
+# CONEXÃO COM BANCO DE DADOS (SUPABASE / POSTGRESQL / SQLITE)
 # ==========================================
-DATABASE_URL = st.secrets.get("DATABASE_URL", None)
-IS_POSTGRES = DATABASE_URL is not None and len(str(DATABASE_URL).strip()) > 0
+IS_POSTGRES = False
+engine = None
+db_error_msg = None
 
-if IS_POSTGRES:
-    from sqlalchemy import create_engine, text
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-else:
-    DB_FILE = "financas_familia_almeida.db"
-    def get_sqlite_conn():
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+try:
+    if "postgres" in st.secrets:
+        pg = st.secrets["postgres"]
+        user_enc = urllib.parse.quote_plus(str(pg.get("user", "postgres")))
+        pass_enc = urllib.parse.quote_plus(str(pg.get("password", "")))
+        host = str(pg.get("host", "")).strip()
+        port = int(pg.get("port", 6543))
+        dbname = str(pg.get("database", "postgres")).strip()
+        DATABASE_URL = f"postgresql+psycopg2://{user_enc}:{pass_enc}@{host}:{port}/{dbname}"
+        
+        from sqlalchemy import create_engine, text
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+        with engine.connect() as test_conn:
+            test_conn.execute(text("SELECT 1"))
+        IS_POSTGRES = True
+        
+    elif "DATABASE_URL" in st.secrets and len(str(st.secrets["DATABASE_URL"]).strip()) > 0:
+        raw_url = str(st.secrets["DATABASE_URL"]).strip()
+        if raw_url.startswith("postgres://"):
+            raw_url = "postgresql+psycopg2://" + raw_url[11:]
+        elif raw_url.startswith("postgresql://") and not raw_url.startswith("postgresql+psycopg2://"):
+            raw_url = "postgresql+psycopg2://" + raw_url[13:]
+            
+        from sqlalchemy import create_engine, text
+        engine = create_engine(raw_url, pool_pre_ping=True)
+        with engine.connect() as test_conn:
+            test_conn.execute(text("SELECT 1"))
+        IS_POSTGRES = True
+        
+except Exception as e:
+    IS_POSTGRES = False
+    engine = None
+    db_error_msg = str(e)
+
+DB_FILE = "financas_familia_almeida.db"
+
+def get_sqlite_conn():
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_database():
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("""
             CREATE TABLE IF NOT EXISTS transacoes (
@@ -271,7 +305,8 @@ init_database()
 # FUNÇÕES DE CRUD
 # ==========================================
 def get_categorias(tipo=None):
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.connect() as conn:
             if tipo:
                 df = pd.read_sql_query(text("SELECT nome FROM categorias WHERE tipo = :t ORDER BY nome ASC"), conn, params={"t": tipo})
@@ -294,7 +329,8 @@ def get_categorias(tipo=None):
             return [dict(r) for r in rows]
 
 def add_categoria(nome, tipo):
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         try:
             with engine.begin() as conn:
                 conn.execute(text("INSERT INTO categorias (nome, tipo) VALUES (:n, :t)"), {"n": nome.strip(), "t": tipo})
@@ -318,7 +354,8 @@ def insert_transacao(data_str, descricao, categoria, tipo, valor, observacoes=""
     debito = float(valor) if tipo in ["Débito", "Aplicação", "Economia"] else 0.0
     credito = float(valor) if tipo == "Crédito" else 0.0
     
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("""
             INSERT INTO transacoes (data, dia, mes, ano, descricao, categoria, tipo, debito, credito, observacoes)
@@ -343,7 +380,8 @@ def update_transacao(transacao_id, data_str, descricao, categoria, tipo, valor, 
     debito = float(valor) if tipo in ["Débito", "Aplicação", "Economia"] else 0.0
     credito = float(valor) if tipo == "Crédito" else 0.0
     
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("""
             UPDATE transacoes 
@@ -366,7 +404,8 @@ def update_transacao(transacao_id, data_str, descricao, categoria, tipo, valor, 
         conn.close()
 
 def delete_transacao(transacao_id):
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM transacoes WHERE id = :id"), {"id": transacao_id})
     else:
@@ -392,7 +431,8 @@ def load_transacoes(mes=None, ano=None):
         
     query_str += " ORDER BY data ASC, id ASC"
     
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.connect() as conn:
             df = pd.read_sql_query(text(query_str), conn, params=params_dict)
     else:
@@ -412,7 +452,8 @@ def load_transacoes(mes=None, ano=None):
     return df
 
 def get_anos_disponiveis():
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.connect() as conn:
             df = pd.read_sql_query(text("SELECT DISTINCT ano FROM transacoes ORDER BY ano DESC"), conn)
             anos = df['ano'].tolist()
@@ -434,7 +475,8 @@ def format_currency(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def get_metas():
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.connect() as conn:
             df = pd.read_sql_query(text("SELECT * FROM metas_economias ORDER BY id DESC"), conn)
             return df.to_dict(orient="records")
@@ -447,7 +489,8 @@ def get_metas():
         return [dict(r) for r in rows]
 
 def insert_meta(nome, valor_alvo, valor_atual, data_limite, categoria):
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("""
             INSERT INTO metas_economias (nome, valor_alvo, valor_atual, data_limite, categoria)
@@ -467,7 +510,8 @@ def insert_meta(nome, valor_alvo, valor_atual, data_limite, categoria):
         conn.close()
 
 def update_meta_valor(meta_id, novo_valor):
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("UPDATE metas_economias SET valor_atual = :v WHERE id = :id"), {"v": float(novo_valor), "id": meta_id})
     else:
@@ -478,7 +522,8 @@ def update_meta_valor(meta_id, novo_valor):
         conn.close()
 
 def delete_meta(meta_id):
-    if IS_POSTGRES:
+    if IS_POSTGRES and engine is not None:
+        from sqlalchemy import text
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM metas_economias WHERE id = :id"), {"id": meta_id})
     else:
@@ -665,6 +710,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.sidebar.title("🧭 Navegação & Filtros")
+
+# Status da Conexão
+if IS_POSTGRES:
+    st.sidebar.success("🟢 Conectado ao Supabase (Nuvem)")
+else:
+    st.sidebar.info("⚪ Usando Banco Local (SQLite)")
+    if db_error_msg:
+        with st.sidebar.expander("ℹ️ Detalhes da Conexão"):
+            st.caption(f"Aviso: {db_error_msg}")
 
 if st.sidebar.button("🔒 Sair do Aplicativo"):
     st.session_state.authenticated = False

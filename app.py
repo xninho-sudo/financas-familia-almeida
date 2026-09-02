@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# ESTILIZAÇÃO CSS MODERNA (COM PROTEÇÃO ANTI-CRASH)
+# ESTILIZAÇÃO CSS MODERNA
 # ==========================================
 st.markdown("""
 <style translate="no">
@@ -81,85 +81,189 @@ st.markdown("""
     .metric-red { color: #DC2626; }
     .metric-blue { color: #2563EB; }
     .metric-purple { color: #7C3AED; }
+    
+    .login-card {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        padding: 30px;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08);
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CAMADA DE BANCO DE DADOS (SQLite)
+# SISTEMA DE LOGIN COM SENHA
 # ==========================================
-DB_FILE = "financas_familia_almeida.db"
+def check_authentication():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+        
+    if not st.session_state.authenticated:
+        _, col_login, _ = st.columns()
+        with col_login:
+            st.markdown("""
+            <div class="login-card" translate="no">
+                <h2 style="color: #1E3A8A; margin-bottom: 4px;">🏛️ Finanças Família Almeida</h2>
+                <p style="color: #6B7280; font-size: 14px; margin-bottom: 20px;">Acesso Restrito e Seguro</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            with st.form("form_login"):
+                senha_digitada = st.text_input("Digite a senha de acesso:", type="password", placeholder="Sua senha...")
+                btn_entrar = st.form_submit_button("🔓 Acessar Sistema", type="primary", use_container_width=True)
+                
+                if btn_entrar:
+                    senha_correta = st.secrets.get("SENHA_ACESSO", "Almeida@2026")
+                    if senha_digitada == senha_correta:
+                        st.session_state.authenticated = True
+                        st.success("Acesso autorizado!")
+                        st.rerun()
+                    else:
+                        st.error("Senha incorreta. Tente novamente.")
+        st.stop()
 
-def get_db():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+check_authentication()
+
+# ==========================================
+# CAMADA DE BANCO DE DADOS HÍBRIDA (SUPABASE / SQLITE)
+# ==========================================
+DATABASE_URL = st.secrets.get("DATABASE_URL", None)
+IS_POSTGRES = DATABASE_URL is not None and len(str(DATABASE_URL).strip()) > 0
+
+if IS_POSTGRES:
+    from sqlalchemy import create_engine, text
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+else:
+    DB_FILE = "financas_familia_almeida.db"
+    def get_sqlite_conn():
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def init_database():
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS transacoes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data TEXT NOT NULL,
-        dia INTEGER NOT NULL,
-        mes INTEGER NOT NULL,
-        ano INTEGER NOT NULL,
-        descricao TEXT NOT NULL,
-        categoria TEXT NOT NULL,
-        tipo TEXT NOT NULL,
-        debito REAL DEFAULT 0.0,
-        credito REAL DEFAULT 0.0,
-        observacoes TEXT
-    )
-    """)
-    
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS categorias (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT UNIQUE NOT NULL,
-        tipo TEXT NOT NULL
-    )
-    """)
-    
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS metas_economias (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        valor_alvo REAL NOT NULL,
-        valor_atual REAL DEFAULT 0.0,
-        data_limite TEXT,
-        categoria TEXT
-    )
-    """)
-    
-    cursor.execute("SELECT COUNT(*) FROM categorias")
-    if cursor.fetchone()[0] == 0:
-        categorias_iniciais = [
-            ("Salário", "Receita"),
-            ("Rendimentos de Investimentos", "Receita"),
-            ("Serviços Extras / Freelance", "Receita"),
-            ("Outras Receitas", "Receita"),
-            ("Moradia (Aluguel, Condomínio, IPTU)", "Despesa"),
-            ("Alimentação & Supermercado", "Despesa"),
-            ("Transporte & Combustível", "Despesa"),
-            ("Saúde, Convênio & Farmácia", "Despesa"),
-            ("Educação & Cursos", "Despesa"),
-            ("Lazer, Restaurantes & Viagens", "Despesa"),
-            ("Assinaturas & Conectividade", "Despesa"),
-            ("Compras Pessoais & Vestuário", "Despesa"),
-            ("Manutenção & Imprevistos", "Despesa"),
-            ("Impostos & Tarifas Bancárias", "Despesa"),
-            ("Reserva de Emergência", "Economia"),
-            ("Poupança para Objetivos", "Economia"),
-            ("Renda Fixa (CDB, Tesouro)", "Investimento"),
-            ("Renda Variável (Ações e FIIs)", "Investimento"),
-            ("Previdência Privada", "Investimento")
-        ]
-        cursor.executemany("INSERT INTO categorias (nome, tipo) VALUES (?, ?)", categorias_iniciais)
-        
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS transacoes (
+                id SERIAL PRIMARY KEY,
+                data TEXT NOT NULL,
+                dia INTEGER NOT NULL,
+                mes INTEGER NOT NULL,
+                ano INTEGER NOT NULL,
+                descricao TEXT NOT NULL,
+                categoria TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                debito DOUBLE PRECISION DEFAULT 0.0,
+                credito DOUBLE PRECISION DEFAULT 0.0,
+                observacoes TEXT
+            );
+            """))
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS categorias (
+                id SERIAL PRIMARY KEY,
+                nome TEXT UNIQUE NOT NULL,
+                tipo TEXT NOT NULL
+            );
+            """))
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS metas_economias (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                valor_alvo DOUBLE PRECISION NOT NULL,
+                valor_atual DOUBLE PRECISION DEFAULT 0.0,
+                data_limite TEXT,
+                categoria TEXT
+            );
+            """))
+            
+            res = conn.execute(text("SELECT COUNT(*) FROM categorias")).scalar()
+            if res == 0:
+                categorias_iniciais = [
+                    ("Salário", "Receita"),
+                    ("Rendimentos de Investimentos", "Receita"),
+                    ("Serviços Extras / Freelance", "Receita"),
+                    ("Outras Receitas", "Receita"),
+                    ("Moradia (Aluguel, Condomínio, IPTU)", "Despesa"),
+                    ("Alimentação & Supermercado", "Despesa"),
+                    ("Transporte & Combustível", "Despesa"),
+                    ("Saúde, Convênio & Farmácia", "Despesa"),
+                    ("Educação & Cursos", "Despesa"),
+                    ("Lazer, Restaurantes & Viagens", "Despesa"),
+                    ("Assinaturas & Conectividade", "Despesa"),
+                    ("Compras Pessoais & Vestuário", "Despesa"),
+                    ("Manutenção & Imprevistos", "Despesa"),
+                    ("Impostos & Tarifas Bancárias", "Despesa"),
+                    ("Reserva de Emergência", "Economia"),
+                    ("Poupança para Objetivos", "Economia"),
+                    ("Renda Fixa (CDB, Tesouro)", "Investimento"),
+                    ("Renda Variável (Ações e FIIs)", "Investimento"),
+                    ("Previdência Privada", "Investimento")
+                ]
+                for nome, tipo in categorias_iniciais:
+                    conn.execute(text("INSERT INTO categorias (nome, tipo) VALUES (:n, :t) ON CONFLICT DO NOTHING"), {"n": nome, "t": tipo})
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            dia INTEGER NOT NULL,
+            mes INTEGER NOT NULL,
+            ano INTEGER NOT NULL,
+            descricao TEXT NOT NULL,
+            categoria TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            debito REAL DEFAULT 0.0,
+            credito REAL DEFAULT 0.0,
+            observacoes TEXT
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS categorias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT UNIQUE NOT NULL,
+            tipo TEXT NOT NULL
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS metas_economias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            valor_alvo REAL NOT NULL,
+            valor_atual REAL DEFAULT 0.0,
+            data_limite TEXT,
+            categoria TEXT
+        )
+        """)
+        cursor.execute("SELECT COUNT(*) FROM categorias")
+        if cursor.fetchone()[0] == 0:
+            categorias_iniciais = [
+                ("Salário", "Receita"),
+                ("Rendimentos de Investimentos", "Receita"),
+                ("Serviços Extras / Freelance", "Receita"),
+                ("Outras Receitas", "Receita"),
+                ("Moradia (Aluguel, Condomínio, IPTU)", "Despesa"),
+                ("Alimentação & Supermercado", "Despesa"),
+                ("Transporte & Combustível", "Despesa"),
+                ("Saúde, Convênio & Farmácia", "Despesa"),
+                ("Educação & Cursos", "Despesa"),
+                ("Lazer, Restaurantes & Viagens", "Despesa"),
+                ("Assinaturas & Conectividade", "Despesa"),
+                ("Compras Pessoais & Vestuário", "Despesa"),
+                ("Manutenção & Imprevistos", "Despesa"),
+                ("Impostos & Tarifas Bancárias", "Despesa"),
+                ("Reserva de Emergência", "Economia"),
+                ("Poupança para Objetivos", "Economia"),
+                ("Renda Fixa (CDB, Tesouro)", "Investimento"),
+                ("Renda Variável (Ações e FIIs)", "Investimento"),
+                ("Previdência Privada", "Investimento")
+            ]
+            cursor.executemany("INSERT INTO categorias (nome, tipo) VALUES (?, ?)", categorias_iniciais)
+        conn.commit()
+        conn.close()
 
 init_database()
 
@@ -167,80 +271,135 @@ init_database()
 # FUNÇÕES DE CRUD
 # ==========================================
 def get_categorias(tipo=None):
-    conn = get_db()
-    cursor = conn.cursor()
-    if tipo:
-        cursor.execute("SELECT nome FROM categorias WHERE tipo = ? ORDER BY nome ASC", (tipo,))
+    if IS_POSTGRES:
+        with engine.connect() as conn:
+            if tipo:
+                df = pd.read_sql_query(text("SELECT nome FROM categorias WHERE tipo = :t ORDER BY nome ASC"), conn, params={"t": tipo})
+                return df["nome"].tolist()
+            else:
+                df = pd.read_sql_query(text("SELECT nome, tipo FROM categorias ORDER BY tipo, nome ASC"), conn)
+                return df.to_dict(orient="records")
     else:
-        cursor.execute("SELECT nome, tipo FROM categorias ORDER BY tipo, nome ASC")
-    rows = cursor.fetchall()
-    conn.close()
-    if tipo:
-        return [r["nome"] for r in rows]
-    return [dict(r) for r in rows]
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        if tipo:
+            cursor.execute("SELECT nome FROM categorias WHERE tipo = ? ORDER BY nome ASC", (tipo,))
+            rows = cursor.fetchall()
+            conn.close()
+            return [r["nome"] for r in rows]
+        else:
+            cursor.execute("SELECT nome, tipo FROM categorias ORDER BY tipo, nome ASC")
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
 
 def add_categoria(nome, tipo):
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO categorias (nome, tipo) VALUES (?, ?)", (nome.strip(), tipo))
-        conn.commit()
-        success = True
-    except sqlite3.IntegrityError:
-        success = False
-    conn.close()
-    return success
+    if IS_POSTGRES:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("INSERT INTO categorias (nome, tipo) VALUES (:n, :t)"), {"n": nome.strip(), "t": tipo})
+            return True
+        except Exception:
+            return False
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO categorias (nome, tipo) VALUES (?, ?)", (nome.strip(), tipo))
+            conn.commit()
+            success = True
+        except sqlite3.IntegrityError:
+            success = False
+        conn.close()
+        return success
 
 def insert_transacao(data_str, descricao, categoria, tipo, valor, observacoes=""):
     d_obj = datetime.strptime(data_str, "%Y-%m-%d").date()
     debito = float(valor) if tipo in ["Débito", "Aplicação", "Economia"] else 0.0
     credito = float(valor) if tipo == "Crédito" else 0.0
     
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-    INSERT INTO transacoes (data, dia, mes, ano, descricao, categoria, tipo, debito, credito, observacoes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip()))
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("""
+            INSERT INTO transacoes (data, dia, mes, ano, descricao, categoria, tipo, debito, credito, observacoes)
+            VALUES (:d, :dia, :mes, :ano, :desc, :cat, :tipo, :deb, :cred, :obs)
+            """), {
+                "d": data_str, "dia": d_obj.day, "mes": d_obj.month, "ano": d_obj.year,
+                "desc": descricao.strip(), "cat": categoria, "tipo": tipo,
+                "deb": debito, "cred": credito, "obs": observacoes.strip()
+            })
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO transacoes (data, dia, mes, ano, descricao, categoria, tipo, debito, credito, observacoes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip()))
+        conn.commit()
+        conn.close()
 
 def update_transacao(transacao_id, data_str, descricao, categoria, tipo, valor, observacoes=""):
     d_obj = datetime.strptime(data_str, "%Y-%m-%d").date()
     debito = float(valor) if tipo in ["Débito", "Aplicação", "Economia"] else 0.0
     credito = float(valor) if tipo == "Crédito" else 0.0
     
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-    UPDATE transacoes 
-    SET data = ?, dia = ?, mes = ?, ano = ?, descricao = ?, categoria = ?, tipo = ?, debito = ?, credito = ?, observacoes = ?
-    WHERE id = ?
-    """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip(), transacao_id))
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("""
+            UPDATE transacoes 
+            SET data = :d, dia = :dia, mes = :mes, ano = :ano, descricao = :desc, categoria = :cat, tipo = :tipo, debito = :deb, credito = :cred, observacoes = :obs
+            WHERE id = :id
+            """), {
+                "d": data_str, "dia": d_obj.day, "mes": d_obj.month, "ano": d_obj.year,
+                "desc": descricao.strip(), "cat": categoria, "tipo": tipo,
+                "deb": debito, "cred": credito, "obs": observacoes.strip(), "id": transacao_id
+            })
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+        UPDATE transacoes 
+        SET data = ?, dia = ?, mes = ?, ano = ?, descricao = ?, categoria = ?, tipo = ?, debito = ?, credito = ?, observacoes = ?
+        WHERE id = ?
+        """, (data_str, d_obj.day, d_obj.month, d_obj.year, descricao.strip(), categoria, tipo, debito, credito, observacoes.strip(), transacao_id))
+        conn.commit()
+        conn.close()
 
 def delete_transacao(transacao_id):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM transacoes WHERE id = ?", (transacao_id,))
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM transacoes WHERE id = :id"), {"id": transacao_id})
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM transacoes WHERE id = ?", (transacao_id,))
+        conn.commit()
+        conn.close()
 
 def load_transacoes(mes=None, ano=None):
-    conn = get_db()
-    query = "SELECT * FROM transacoes WHERE 1=1"
-    params = []
-    if ano:
-        query += " AND ano = ?"
-        params.append(ano)
-    if mes:
-        query += " AND mes = ?"
-        params.append(mes)
-    query += " ORDER BY data ASC, id ASC"
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
+    query_str = "SELECT * FROM transacoes WHERE 1=1"
+    params_dict = {}
+    params_list = []
     
+    if ano:
+        query_str += " AND ano = :ano" if IS_POSTGRES else " AND ano = ?"
+        params_dict["ano"] = ano
+        params_list.append(ano)
+    if mes:
+        query_str += " AND mes = :mes" if IS_POSTGRES else " AND mes = ?"
+        params_dict["mes"] = mes
+        params_list.append(mes)
+        
+    query_str += " ORDER BY data ASC, id ASC"
+    
+    if IS_POSTGRES:
+        with engine.connect() as conn:
+            df = pd.read_sql_query(text(query_str), conn, params=params_dict)
+    else:
+        conn = get_sqlite_conn()
+        df = pd.read_sql_query(query_str, conn, params=params_list)
+        conn.close()
+        
     if not df.empty:
         df['saldo_linha'] = df['credito'] - df['debito']
         df['saldo_acumulado'] = df['saldo_linha'].cumsum()
@@ -253,11 +412,17 @@ def load_transacoes(mes=None, ano=None):
     return df
 
 def get_anos_disponiveis():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT ano FROM transacoes ORDER BY ano DESC")
-    anos = [r[0] for r in cursor.fetchall()]
-    conn.close()
+    if IS_POSTGRES:
+        with engine.connect() as conn:
+            df = pd.read_sql_query(text("SELECT DISTINCT ano FROM transacoes ORDER BY ano DESC"), conn)
+            anos = df['ano'].tolist()
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT ano FROM transacoes ORDER BY ano DESC")
+        anos = [r[0] for r in cursor.fetchall()]
+        conn.close()
+        
     current_year = datetime.now().year
     if current_year not in anos:
         anos.insert(0, current_year)
@@ -269,36 +434,59 @@ def format_currency(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def get_metas():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM metas_economias ORDER BY id DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    if IS_POSTGRES:
+        with engine.connect() as conn:
+            df = pd.read_sql_query(text("SELECT * FROM metas_economias ORDER BY id DESC"), conn)
+            return df.to_dict(orient="records")
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM metas_economias ORDER BY id DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
 def insert_meta(nome, valor_alvo, valor_atual, data_limite, categoria):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-    INSERT INTO metas_economias (nome, valor_alvo, valor_atual, data_limite, categoria)
-    VALUES (?, ?, ?, ?, ?)
-    """, (nome, float(valor_alvo), float(valor_atual), data_limite, categoria))
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("""
+            INSERT INTO metas_economias (nome, valor_alvo, valor_atual, data_limite, categoria)
+            VALUES (:n, :alvo, :atual, :dt, :cat)
+            """), {
+                "n": nome, "alvo": float(valor_alvo), "atual": float(valor_atual),
+                "dt": data_limite, "cat": categoria
+            })
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO metas_economias (nome, valor_alvo, valor_atual, data_limite, categoria)
+        VALUES (?, ?, ?, ?, ?)
+        """, (nome, float(valor_alvo), float(valor_atual), data_limite, categoria))
+        conn.commit()
+        conn.close()
 
 def update_meta_valor(meta_id, novo_valor):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE metas_economias SET valor_atual = ? WHERE id = ?", (float(novo_valor), meta_id))
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE metas_economias SET valor_atual = :v WHERE id = :id"), {"v": float(novo_valor), "id": meta_id})
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE metas_economias SET valor_atual = ? WHERE id = ?", (float(novo_valor), meta_id))
+        conn.commit()
+        conn.close()
 
 def delete_meta(meta_id):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM metas_economias WHERE id = ?", (meta_id,))
-    conn.commit()
-    conn.close()
+    if IS_POSTGRES:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM metas_economias WHERE id = :id"), {"id": meta_id})
+    else:
+        conn = get_sqlite_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM metas_economias WHERE id = ?", (meta_id,))
+        conn.commit()
+        conn.close()
 
 # ==========================================
 # GERADOR DE RELATÓRIO EM PDF
@@ -477,6 +665,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.sidebar.title("🧭 Navegação & Filtros")
+
+# Botão de Logout na Barra Lateral
+if st.sidebar.button("🔒 Sair do Aplicativo"):
+    st.session_state.authenticated = False
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 menu = st.sidebar.radio(
     "Módulo:",
@@ -673,7 +868,7 @@ elif menu == "📝 Lançamentos & Extrato":
             )
             
             item_atual = df_todas[df_todas['id'] == transacao_selecionada_id].iloc[0]
-            data_atual_obj = datetime.strptime(item_atual['data'], "%Y-%m-%d").date()
+            data_atual_obj = datetime.strptime(str(item_atual['data'])[:10], "%Y-%m-%d").date()
             valor_atual_num = float(item_atual['debito'] if item_atual['debito'] > 0 else item_atual['credito'])
             
             tipo_invert_map = {
@@ -871,7 +1066,7 @@ elif menu == "🎯 Economias & Metas":
     metas = get_metas()
     if metas:
         for m in metas:
-            perc = (m['valor_atual'] / m['valor_alvo']) if m['valor_alvo'] > 0 else 0
+            perc = (float(m['valor_atual']) / float(m['valor_alvo'])) if float(m['valor_alvo']) > 0 else 0
             perc_display = min(perc * 100, 100.0)
             
             with st.container():
@@ -885,7 +1080,7 @@ elif menu == "🎯 Economias & Metas":
                 with col_mt3:
                     st.markdown(f"**Alvo:** `{format_currency(m['valor_alvo'])}`")
                 with col_mt4:
-                    falta = max(m['valor_alvo'] - m['valor_atual'], 0.0)
+                    falta = max(float(m['valor_alvo']) - float(m['valor_atual']), 0.0)
                     st.markdown(f"**Falta:** `{format_currency(falta)}`")
                 
                 with st.expander(f"⚙️ Atualizar ou Excluir '{m['nome']}'"):

@@ -666,7 +666,6 @@ st.markdown("""
 
 st.sidebar.title("🧭 Navegação & Filtros")
 
-# Botão de Logout na Barra Lateral
 if st.sidebar.button("🔒 Sair do Aplicativo"):
     st.session_state.authenticated = False
     st.rerun()
